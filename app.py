@@ -2,19 +2,19 @@ import pandas as pd
 import requests
 import time
 from datetime import datetime, time as dt_time
+from zoneinfo import ZoneInfo
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import streamlit as st
 import plotly.graph_objects as go
 
 # ============================================================
-# CONFIGURATION & API AUTH
+# CONFIGURATION & CONFIG SETTINGS
 # ============================================================
-ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI2M0FZSEUiLCJqdGkiOiI2YTMwY2UxNTY4ODI0Zjc3ZDc1NmU3NjgiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlzRXh0ZW5kZWQiOnRydWUsImlhdCI6MTc4MTU4MzM4MSwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxODEzMTgzMjAwfQ.IoRDQhbhcn3w9Fkw75N3eBSamLcaA8GcAhVjf5K-iL8"
+ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI2M0FZSEUiLCJqdGkiOiI2YTMwY2UxNTY4ODI0Zjc3ZDc1NmU3NjgiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlzRXh0ZW5kZWQiOnRydWUsImlhdCI6MTc4MTU4MzM4MSwiaXNzIjoidWR... [TRUNCATED FOR LENGTH - USE YOUR FULL ACCESS TOKEN HERE]"
 
-# Streamlit Page Setup (Dark Theme Match)
-st.set_page_config(page_title="Live Sector Scope Tracker", layout="wide", initial_sidebar_state="collapsed")
-st.markdown("<style>body {background-color: #0d0d0d; color: white;}</style>", unsafe_allow_html=True)
+st.set_page_config(page_title="Live Sector Scope Tracker", layout="wide")
 
-# File Paths (Change these to web URLs or repository paths if hosting in cloud)
+# Use local files uploaded to your GitHub repository folder
 EXCEL_FILE = "FNO all list.xlsx"
 INSTRUMENT_FILE = "instruments.csv"
 
@@ -24,63 +24,69 @@ headers = {
 }
 
 INDEX_KEY_MAP = {
-    "NIFTY50": "NSE_INDEX|Nifty 50", "SENSEX": "BSE_INDEX|SENSEX", "IT": "NSE_INDEX|Nifty IT",
-    "FMCG": "NSE_INDEX|Nifty FMCG", "PHARMA": "NSE_INDEX|Nifty Pharma", "PVT BANKS": "NSE_INDEX|Nifty Private Bank",
-    "NIFTY MID SELECT": "NSE_INDEX|Nifty Midcap Select", "AUTO": "NSE_INDEX|Nifty Auto",
-    "FIN SERVICE": "NSE_INDEX|Nifty Financial Services", "BANKS": "NSE_INDEX|Nifty Bank",
-    "CEMENT": "NSE_INDEX|Nifty Commodities", "ENERGY": "NSE_INDEX|Nifty Energy",
-    "METAL": "NSE_INDEX|Nifty Metal", "PSU BANK": "NSE_INDEX|Nifty PSU Bank", "REALITY": "NSE_INDEX|Nifty Realty"
+    "NIFTY50": "NSE_INDEX|Nifty 50",
+    "SENSEX": "BSE_INDEX|SENSEX",
+    "IT": "NSE_INDEX|Nifty IT",
+    "FMCG": "NSE_INDEX|Nifty FMCG",
+    "PHARMA": "NSE_INDEX|Nifty Pharma",
+    "PVT BANK": "NSE_INDEX|Nifty Private Bank",
+    "NIFTY MID SELECT": "NSE_INDEX|Nifty Midcap Select",
+    "AUTO": "NSE_INDEX|Nifty Auto",
+    "FIN SERVICE": "NSE_INDEX|Nifty Financial Services",
+    "BANK": "NSE_INDEX|Nifty Bank",
+    "CEMENT": "NSE_INDEX|Nifty Commodities",
+    "ENERGY": "NSE_INDEX|Nifty Energy",
+    "METAL": "NSE_INDEX|Nifty Metal",
+    "PSU BANK": "NSE_INDEX|Nifty PSU Bank",
+    "REALTY": "NSE_INDEX|Nifty Realty"
 }
 
-# ============================================================
-# AUTOMATED MARKET TIME GATEKEEPER (IST TIMEZONE FIXED)
-# ============================================================
+# Time Gatekeeper
 def is_market_hours():
-    # Import zoneinfo to natively handle timezones without extra libraries
-    from zoneinfo import ZoneInfo
-    
-    # Force the app to check the time in India (IST)
     ist_zone = ZoneInfo("Asia/Kolkata")
     now_ist = datetime.now(ist_zone)
-    
-    # Check if weekend (Saturday=5, Sunday=6)
     if now_ist.weekday() >= 5:
         return False
-        
-    market_start = dt_time(9, 10)
-    market_end = dt_time(15, 31)
-    
-    return market_start <= now_ist.time() <= market_end
+    return dt_time(9, 10) <= now_ist.time() <= dt_time(15, 31)
 
 # ============================================================
-# DATA INGESTION & CACHING
+# LOAD STRUCTURAL MAPS
 # ============================================================
-@st.cache_data(ttl=3600)
-def load_structural_data():
-    df_sec = pd.read_excel(EXCEL_FILE)[["SYMBOL", "SECTOR"]].dropna(subset=["SECTOR"])
-    df_sec = df_sec[df_sec["SECTOR"].astype(str).str.strip() != ""].drop_duplicates(subset=["SYMBOL", "SECTOR"])
+@st.cache_data(ttl=28800)
+def load_data_structures():
+    df = pd.read_excel(EXCEL_FILE)[["SYMBOL", "SECTOR"]].dropna(subset=["SECTOR"])
+    df["SECTOR"] = df["SECTOR"].astype(str).str.strip().str.upper()
+    df["SYMBOL"] = df["SYMBOL"].astype(str).str.strip()
     
     inst_df = pd.read_csv(INSTRUMENT_FILE)
     instrument_map = {}
     for _, row in inst_df.iterrows():
-        if str(row["segment"]).strip() in ["NSE_EQ", "NSE_INDEX", "BSE_INDEX"]:
+        seg = str(row["segment"]).strip()
+        if seg in ["NSE_EQ", "NSE_INDEX", "BSE_INDEX"]:
             instrument_map[str(row["trading_symbol"]).strip()] = str(row["instrument_key"]).strip()
             
     sector_map = {}
     all_keys = []
-    for _, row in df_sec.iterrows():
-        sym = str(row["SYMBOL"]).strip()
-        sec = str(row["SECTOR"]).strip()
+    for _, row in df.iterrows():
+        sym = row["SYMBOL"]
+        sec = row["SECTOR"]
         if sym in instrument_map:
+            # Clean matching definitions to match dashboard names
+            if sec == "BANKS": sec = "BANK"
+            if sec == "PVT BANKS": sec = "PVT BANK"
+            if sec == "REALITY": sec = "REALTY"
+            
             sector_map.setdefault(sec, []).append(sym)
-            if instrument_map[sym] not in all_keys:
-                all_keys.append(instrument_map[sym])
+            key = instrument_map[sym]
+            if key not in all_keys:
+                all_keys.append(key)
+                
     return sector_map, instrument_map, all_keys
 
-sector_map, instrument_map, all_keys_to_fetch = load_structural_data()
+sector_map, instrument_map, all_keys_to_fetch = load_data_structures()
 
 # ============================================================
-# CORE FETCH LOGIC (Reused from your script)
+# API DATA PROCESSING ENGINES
 # ============================================================
 def fetch_intraday_performance(instrument_key):
     url = f"https://api.upstox.com/v2/historical-candle/intraday/{instrument_key}/1minute"
@@ -89,71 +95,109 @@ def fetch_intraday_performance(instrument_key):
         if res.status_code == 200:
             candles = res.json()["data"]["candles"]
             if candles:
-                # Mock calculation placeholder using active close metrics or live delta
-                return float(candles[0][4]), float(candles[0][4]) 
+                live_ltp = float(candles[0][4])
+                open_price = float(candles[-1][1]) # Day open reference calculation
+                change_pct = ((live_ltp - open_price) / open_price) * 100
+                return instrument_key, change_pct, live_ltp
     except:
         pass
-    return None, None
+    return instrument_key, None, None
+
+def fetch_all_parallel(keys_list):
+    snapshot = {}
+    prices = {}
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        futures = {executor.submit(fetch_intraday_performance, k): k for k in keys_list}
+        for future in as_completed(futures):
+            key = futures[future]
+            try:
+                k, change_pct, ltp = future.result()
+                if change_pct is not None:
+                    snapshot[k] = change_pct
+                    prices[k] = ltp
+            except:
+                pass
+    return snapshot, prices
 
 # ============================================================
-# APP RENDER ENGINE
+# STREAMLIT UI RENDER RUNTIME
 # ============================================================
 st.title("📊 LIVE SECTOR SCOPE TRACKER")
 
-if not is_market_hours():
-    st.warning("⚠️ Market is currently CLOSED. Data extraction pauses automatically from 3:31 PM to 9:10 AM.")
-    # For display consistency while market is shut, we bypass empty returns:
-    st.info("Displaying final snapshot from prior trading session.")
+# Running Parallel Engines
+all_index_keys = list(INDEX_KEY_MAP.values())
+live_snapshot, live_prices = fetch_all_parallel(all_keys_to_fetch + all_index_keys)
 
-# Data processing arrays
-sectors = list(INDEX_KEY_MAP.keys())
-multipliers = [1.95, 1.70, 1.50, 1.35, 1.25, 1.18, 0.60, 0.52, 0.22, 0.02, -0.01, -0.12, -0.15, -0.35, -0.95]
+# Compile Dashboard Calculations
+dashboard_rows = []
+for sector_name, index_key in INDEX_KEY_MAP.items():
+    idx_change = live_snapshot.get(index_key, 0.0)
+    
+    # Track stocks in this specific bucket
+    symbols_in_sector = sector_map.get(sector_name, [])
+    bullish, bearish = 0, 0
+    stock_details = []
+    
+    for sym in symbols_in_sector:
+        k = instrument_map.get(sym)
+        if k in live_snapshot:
+            chg = live_snapshot[k]
+            ltp = live_prices[k]
+            sign = "⬆️" if chg >= 0 else "⬇️"
+            if chg >= 0: bullish += 1
+            else: bearish += 1
+            stock_details.append({"Symbol": sym, "Price": ltp, "Change %": f"{chg:+.2f}%", "Signal": sign, "RawChg": chg})
+            
+    dashboard_rows.append({
+        "Sector": sector_name,
+        "Multiplier": idx_change,
+        "Stocks": stock_details,
+        "Bullish": bullish,
+        "Bearish": bearish,
+        "Total": len(symbols_in_sector)
+    })
 
-# Render interactive Plotly Chart matching your layout exactly
-colors = ['#2ca02c' if m >= 0 else '#d62728' for m in multipliers]
-fig = go.Figure(data=[go.Bar(x=sectors, y=multipliers, marker_color=colors)])
-fig.update_layout(
-    title="SECTOR SCOPE INTERACTIVE GRAPH",
-    template="plotly_dark",
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    yaxis=dict(range=[-1.5, 2.5])
-)
+# Sort calculations from Highest to Lowest Performance (Matches your layout)
+dashboard_rows.sort(key=lambda x: x["Multiplier"], reverse=True)
+
+sectors_sorted = [r["Sector"] for r in dashboard_rows]
+multipliers_sorted = [r["Multiplier"] for r in dashboard_rows]
+colors = ['#2ca02c' if m >= 0 else '#d62728' for m in multipliers_sorted]
+
+# 1. Main Interactive Bar Graph
+fig = go.Figure(data=[go.Bar(x=sectors_sorted, y=multipliers_sorted, marker_color=colors)])
+fig.update_layout(template="plotly_dark", height=400, margin=dict(l=20, r=20, t=20, b=20))
 st.plotly_chart(fig, use_container_width=True)
 
-# Dynamic Selector Component (Mimics clicking a bar graph sector)
+# 2. Clicking Action Area (Dropdown Syncs to the Bar Chart Order)
 st.subheader("🔍 Explore Sector Profiles")
-selected_sector = st.selectbox("Select a sector group to view underlying components:", sectors)
+selected_sector = st.selectbox("Select a sector group to view performance updates:", sectors_sorted)
 
-# Render specific tables based on user drop-down click
-if selected_sector:
-    st.write(f"### Stocks performance inside: **{selected_sector}**")
+# Find corresponding row details matching user select action
+sector_info = next(item for item in dashboard_rows if item["Sector"] == selected_sector)
+
+# 3. Dynamic Sector Stocks Grid
+st.markdown(f"### Component stock status inside: **{selected_sector}**")
+stocks_list = sector_info["Stocks"]
+
+if stocks_list:
+    df_all_stocks = pd.DataFrame(stocks_list)
+    df_up = df_all_stocks[df_all_stocks["RawChg"] >= 0].drop(columns=["RawChg"])
+    df_down = df_all_stocks[df_all_stocks["RawChg"] < 0].drop(columns=["RawChg"])
     
-    # Mock operational framework based on your layout image
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("🔴 **7 Stocks (63.64% Down)**")
-        mock_data_down = {
-            "Symbol": ["APLAPOLLO", "TATASTEEL", "ADANIENT", "JSWSTEEL"],
-            "Price": [1842, 193.56, 2962.9, 1242.2],
-            "Change %": ["-1.08%", "-0.37%", "-0.12%", "-0.33%"],
-            "R-Fact": [1.65, 0.89, 0.80, 0.73],
-            "Signal": ["⬇️", "⬇️", "⬇️", "⬇️"]
-        }
-        st.table(pd.DataFrame(mock_data_down))
-        
+        st.markdown(f"🟢 **{len(df_up)} Stocks Up**")
+        st.dataframe(df_up, use_container_width=True, hide_index=True)
     with col2:
-        st.markdown("🟢 **4 Stocks (36.36% Up)**")
-        mock_data_up = {
-            "Symbol": ["JINDALSTEL", "HINDALCO", "NMDC"],
-            "Price": [1082.6, 986.8, 85.26],
-            "Change %": ["+0.33%", "+0.02%", "+0.12%"],
-            "R-Fact": [0.97, 0.73, 0.73],
-            "Signal": ["⬆️", "⬆️", "⬆️"]
-        }
-        st.table(pd.DataFrame(mock_data_up))
+        st.markdown(f"🔴 **{len(df_down)} Stocks Down**")
+        st.dataframe(df_down, use_container_width=True, hide_index=True)
+else:
+    st.info("No matching live stock symbol tickers available for this sector mapping index right now.")
 
-# Auto-refresh feature to cleanly rerun every 60 seconds during live hours
+# Live loop re-run configuration
 if is_market_hours():
     time.sleep(60)
     st.rerun()
+else:
+    st.caption(f"Paused. Current IST time is outside live trading parameters.")
