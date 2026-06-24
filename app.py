@@ -33,16 +33,24 @@ INDEX_KEY_MAP = {
 }
 
 # ============================================================
-# AUTOMATED MARKET TIME GATEKEEPER
+# AUTOMATED MARKET TIME GATEKEEPER (IST TIMEZONE FIXED)
 # ============================================================
 def is_market_hours():
-    now = datetime.now()
+    # Import zoneinfo to natively handle timezones without extra libraries
+    from zoneinfo import ZoneInfo
+    
+    # Force the app to check the time in India (IST)
+    ist_zone = ZoneInfo("Asia/Kolkata")
+    now_ist = datetime.now(ist_zone)
+    
     # Check if weekend (Saturday=5, Sunday=6)
-    if now.weekday() >= 5:
+    if now_ist.weekday() >= 5:
         return False
+        
     market_start = dt_time(9, 10)
     market_end = dt_time(15, 31)
-    return market_start <= now.time() <= market_end
+    
+    return market_start <= now_ist.time() <= market_end
 
 # ============================================================
 # DATA INGESTION & CACHING
