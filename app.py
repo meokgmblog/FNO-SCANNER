@@ -103,7 +103,7 @@ multipliers = [1.95, 1.70, 1.50, 1.35, 1.25, 1.18, 0.60, 0.52, 0.22, 0.02, -0.01
 
 # Render interactive Plotly Chart matching your layout exactly
 colors = ['#2ca02c' if m >= 0 else '#d62728' for m in multipliers]
-fig = go.Figure(data=[go.Bar(x=sectors, y=multipliers, marker_color=colors, rmax=2)])
+fig = go.Figure(data=[go.Bar(x=sectors, y=multipliers, marker_color=colors)])
 fig.update_layout(
     title="SECTOR SCOPE INTERACTIVE GRAPH",
     template="plotly_dark",
